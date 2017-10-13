@@ -10,7 +10,7 @@
 	<script src="./CSTestPage.js"></script>
 </head>
 <body>
-	<h1 class='text-center'>Barebones front-end to test JS side of CurrencySpot smart contract</h1>
+	<h1 class='text-center'>Barebones front-end to test CurrencySpot smart contract</h1>
 	<div class='container-m1' style='padding-bottom: 10px'>
 		<form id='start' class='form-inline'>
 			<div class='form-group'>
@@ -20,6 +20,13 @@
 			<button class='btn btn-default start'>Start</button>
 			<button class='btn btn-default reset' style='color: red'>Reset</button>
 		</form>
+	</div>
+	<div class='container-m1'>
+		Owner address: <b id='ownerIs'></b>
+	</div>
+	<div class='container-m1' id='hedgeArea'>
+	</div>
+	<div class='container-m1' id='txArea'>
 	</div>
 </body>
 </html>

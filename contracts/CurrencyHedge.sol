@@ -17,10 +17,8 @@ contract CurrencyHedge is Owned {
         bytes32 instID;     	// Institution identifier
         bytes32 acctID; 		// ID of account associated with institution
         bool active;			// Hedge contract state (active or expired?)
-		
-		Transaction[] hedgeTx;	// Transactions associated with a particular hedge
     }
-	
+
     struct Transaction {
 		// This struct will eventually need a way to check that the purchase made
 		// by the client is actually covered by the hedge (e.g. client made the
@@ -33,69 +31,66 @@ contract CurrencyHedge is Owned {
 	// Create a global list of all hedges
 	// NOTE: This implies that hedgeTx will also be public, which it probably shouldn't be
 	Hedge[] public allHedges;
-	
+
 	// Solidity cannot return structs, and can only return arrays of addresses, bools, or uints
 	mapping (address => uint256[]) private hedgeIndices;
-	
-    // CurrencyHedge: Contract creator. 
+
+    // Reverse mapping of indices to addresses for easy verification
+    mapping (uint256 => address) private hedgeBeneficiaries;
+
+    // Mapping of Hedge indices to arrays of Transactions.  This must be used because Solidity does weird
+    // things when a struct array is nested inside another struct
+	// Refer to https://ethereum.stackexchange.com/questions/3525/how-to-initialize-empty-struct-array-in-new-struct
+    mapping (uint256 => Transaction[]) private allTx;
+
+    // CurrencyHedge: Contract creator.
     function CurrencyHedge() {
+        owner = msg.sender;
     }
-	
-	// addHedge:
+
+	// addHedge: Add a new hedge to the book
 	function addHedge(address _beneficiary, uint _hedgeStart, uint _hedgeEnd, bytes3 _homeCurr,
 		bytes3 _hedgeCurr, uint64 _refRate, bytes32 _instID, bytes32 _acctID) public onlyOwner {
-		
-		require(_hedgeEnd - _hedgeStart >= 604800);		// Enforce minimum hedge period of 7 days = 604,800 seconds		
 
-		// Create a new hedge
-		Hedge storage newHedge;
-		
-		// Populate the information in the new Hedge.  This method must be used,
-		// since struct arrays cannot be passed as parameters (i.e. Hedge memory
-		// newHedge = Hedge(...) won't work).
-		// Refer to https://ethereum.stackexchange.com/questions/3525/how-to-initialize-empty-struct-array-in-new-struct
-		newHedge.beneficiary = _beneficiary;
-		newHedge.hedgeStart = _hedgeStart;
-		newHedge.hedgeEnd = _hedgeEnd;
-		newHedge.homeCurr = _homeCurr;
-		newHedge.hedgeCurr = _hedgeCurr;
-		newHedge.refRate = _refRate;
-		newHedge.instID = _instID;
-		newHedge.acctID = _acctID;
-		newHedge.active = false;
-		
+		require(_hedgeEnd - _hedgeStart >= 604800);		// Enforce minimum hedge period of 7 days = 604,800 seconds
+
+		// Create a new hedge and populate the information.
+		Hedge memory newHedge = Hedge(_beneficiary, _hedgeStart, _hedgeEnd, _homeCurr, _hedgeCurr, _refRate, _instID, _acctID, false);
+
 		// Add the hedge to the global list, and associate the index of the hedge with the beneficiary
 		allHedges.push(newHedge);
-		hedgeIndices[_beneficiary].push(allHedges.length - 1);
+        uint newIndex = allHedges.length - 1;
+		hedgeIndices[_beneficiary].push(newIndex);
+        hedgeBeneficiaries[newIndex] = _beneficiary;
 	}
-	
+
 	// getHedgeIndices: Retrieve a list of indices of the allHedges array associated with a particular beneficiary's
 	// Refer to https://ethereum.stackexchange.com/questions/3589/how-can-i-return-an-array-of-struct-from-a-function
 	function getHedgeIndices(address _beneficiary) public onlyOwner returns (uint256[]) {
 		return hedgeIndices[_beneficiary];
 	}
-	
+
 	// getNumberOfTx: Retrieve the number of transactions currently associated with a given hedge
-	function getNumberOfTx(uint _hedgeIndex) public onlyOwner returns (uint) {
-		return allHedges[_hedgeIndex].hedgeTx.length;
+	function getNumberOfTx(uint _index) public onlyOwner returns (uint) {
+		return allTx[_index].length;
 	}
-	
+
 	// activateHedge: Activate a hedge and allow transactions to be recorded to it
 	function activateHedge(address _beneficiary, uint256 _index) public onlyOwner {
-		// NEED: Confirm that the specified index is associated with the specified beneficiary
-		require(!allHedges[_index].active);				// Check that the hedge is currently inactive
-		
+        require(hedgeBeneficiaries[_index] == _beneficiary);    // Check that the specified index and beneficiary are associated
+        require(!allHedges[_index].active);				// Check that the hedge is currently inactive
+
 		// This should be verified outside of the contract.  'now' is an alias for
 		// block.timestamp, not current time
 		require(allHedges[_index].hedgeEnd < now);		// Don't reactivate a dead hedge
 		require(allHedges[_index].hedgeStart >= now);	// Don't prematurely activate a hedge
-		
+
 		allHedges[_index].active = true;
 	}
-	
+
 	// deactivateHedge: Deactivate a hedge and prevent any new data from being added
 	function deactivateHedge(address _beneficiary, uint256 _index) public onlyOwner {
-		// NEED: Confirm that the specified index is associated with the specified beneficiary
+        require(hedgeBeneficiaries[_index] == _beneficiary);    // Check that the specified index and beneficiary are associated
 		require(allHedges[_index].active);				// Check that the hedge is currently active
 
 		// This should be verified outside of the contract.  'now' is an alias for
@@ -104,33 +99,35 @@ contract CurrencyHedge is Owned {
 
 		allHedges[_index].active = false;
 	}
-	
+
 	// recordTransaction: Add a transaction record to a particular hedge
-	function recordTransaction(address _beneficiary, uint256 _index, uint64 _timeStamp, uint64 _txValue, 
+	function recordTransaction(address _beneficiary, uint256 _index, uint64 _timeStamp, uint64 _txValue,
 		uint64 _spotRate) public onlyOwner {
-			
-		//NEED: Confirm that the specified index is associated with the specified beneficiary
-		require(allHedges[_index].active);
+
+        require(hedgeBeneficiaries[_index] == _beneficiary);    // Check that the specified index and beneficiary are associated
+		require(allHedges[_index].active);       // Check that the hedge is currently inactive
 
 		// This should be verified outside of the contract.  'now' is an alias for
 		// block.timestamp, not current time
 		require(allHedges[_index].hedgeEnd <= now);
-	
+
 		Transaction memory newTx = Transaction(_timeStamp, _txValue, _spotRate - allHedges[_index].refRate);
-		allHedges[_index].hedgeTx.push(newTx);
+		allTx[_index].push(newTx);
 	}
-	
+
 	// endContract: Close out the hedge and pay whatever is needed to the beneficiary
 	function endContract(address _beneficiary, uint256 _index) public payable onlyOwner {
-		//NEED: Confirm that the specified index is associated with the specified beneficiary
-		require(!allHedges[_index].active);
-		
-		uint totalPayout = 0;		
-		for (uint256 i = 0; i < allHedges[_index].hedgeTx.length; i++) {
-			if (allHedges[_index].hedgeTx[i].rateDiff > 0)
-				totalPayout += allHedges[_index].hedgeTx[i].txValue * allHedges[_index].hedgeTx[i].rateDiff;
+        require(hedgeBeneficiaries[_index] == _beneficiary);    // Check that the specified index and beneficiary are associated
+		require(!allHedges[_index].active);       // Check that the hedge is currently inactive
+        require(allTx[_index].length > 0);      // Check that the list of transactions is greater than zero
+
+        // Calculate the value of the payout to the beneficiary
+		uint totalPayout = 0;
+		for (uint256 i = 0; i < allTx[_index].length; i++) {
+			if (allTx[_index][i].rateDiff > 0)
+				totalPayout += allTx[_index][i].txValue * allTx[_index][i].rateDiff;
 		}
-		
+
 		// Deactivate the hedge
 		deactivateHedge(_beneficiary, _index);
 		_beneficiary.transfer(totalPayout);
